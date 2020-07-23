@@ -9,7 +9,7 @@ import argparse
 
 rosetta_output_file_name = 'flexddg.log'
 output_database_name = 'ddG.db3'
-trajectory_stride = 5
+trajectory_stride = 1000
 script_output_folder = 'analysis_output'
 
 zemu_gam_params = {
@@ -130,19 +130,33 @@ def calc_ddg( scores ):
             nstructs_to_analyze.add(x)
     nstructs_to_analyze = sorted(nstructs_to_analyze)
 
+    def sort_by_wt_score(scores):
+        #scores.set_index('struct_num',inplace=True)
+        bound_wt_score = scores.loc[(scores['state'] == 'bound_wt')].copy()
+        bound_wt_sorted = bound_wt_score.sort_values('total_score')
+        bound_wt_sorted.set_index('struct_num',drop=False,inplace=True)
+   #     scores.set_index('struct_num',drop=False,inplace=True)
+   #     scores_sorted = scores.groupby('state').apply(lambda x: x.reindex_like(bound_wt_sorted))
+        return bound_wt_sorted.index.unique()
+
+    struct_ord = scores.groupby('backrub_steps').apply(sort_by_wt_score)
     all_ddg_scores = []
-    for nstructs in nstructs_to_analyze:
-        ddg_scores = scores.loc[ ((scores['state'] == 'unbound_mut') | (scores['state'] == 'bound_wt')) & (scores['struct_num'] <= nstructs) ].copy()
-        for column in ddg_scores.columns:
-            if column not in ['state', 'case_name', 'backrub_steps', 'struct_num', 'score_function_name']:
-                ddg_scores.loc[:,column] *= -1.0
-        ddg_scores = ddg_scores.append( scores.loc[ ((scores['state'] == 'unbound_wt') | (scores['state'] == 'bound_mut')) & (scores['struct_num'] <= nstructs) ].copy() )
-        ddg_scores = ddg_scores.groupby( ['case_name', 'backrub_steps', 'struct_num', 'score_function_name'] ).sum().reset_index()
+    struct_scores = []
+    for br_step in scores['backrub_steps'].unique():
+        for nstructs in nstructs_to_analyze:
+            top_structs = struct_ord[br_step][0:nstructs]
+            ddg_scores = scores.loc[ ((scores['state'] == 'unbound_mut') | (scores['state'] == 'bound_wt')) & \
+            (scores['backrub_steps'] == br_step) & (scores['struct_num'].isin(top_structs)) ].copy()
+            for column in ddg_scores.columns:
+                if column not in ['state', 'case_name', 'backrub_steps', 'struct_num', 'score_function_name']:
+                    ddg_scores.loc[:,column] *= -1.0
+            ddg_scores = ddg_scores.append( scores.loc[ ((scores['state'] == 'unbound_wt') | (scores['state'] == 'bound_mut')) & (scores['struct_num'] <= nstructs) ].copy() )
+            ddg_scores = ddg_scores.groupby( ['case_name', 'struct_num', 'score_function_name'] ).sum().reset_index()
 
-        if nstructs == total_structs:
-            struct_scores = ddg_scores.copy()
+            if nstructs == total_structs:
+                struct_scores.append(ddg_scores.copy())
 
-        ddg_scores = ddg_scores.groupby( ['case_name', 'backrub_steps', 'score_function_name'] ).mean().round(decimals=5).reset_index()
+        ddg_scores = ddg_scores.groupby( ['case_name', 'score_function_name'] ).mean().round(decimals=5).reset_index()
         new_columns = list(ddg_scores.columns.values)
         new_columns.remove( 'struct_num' )
         ddg_scores = ddg_scores[new_columns]
@@ -150,7 +164,7 @@ def calc_ddg( scores ):
         ddg_scores[ 'nstruct' ] = nstructs
         all_ddg_scores.append(ddg_scores)
 
-    return (pd.concat(all_ddg_scores), struct_scores)
+    return (pd.concat(all_ddg_scores), pd.concat(struct_scores))
 
 def calc_dgs( scores ):
     l = []
